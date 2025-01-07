@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}View Streams{% endblock %}
+{% block content %}
+<div class="text-center">
+    <h1 class="mb-4">Available Live Streams</h1>
+    <div id="streams" class="d-flex flex-wrap justify-content-center gap-3">
+        {% if streams %}
+            {% for stream_id in streams %}
+                <a href="/watch_stream/{{ stream_id }}/" class="btn btn-primary">
+                    Watch Stream: {{ stream_id }}
+                </a>
+            {% endfor %}
+        {% else %}
+            <p class="text-muted">No active streams are currently available.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

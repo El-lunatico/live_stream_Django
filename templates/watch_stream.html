@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}View Stream{% endblock %}
+{% block content %}
+<div style="text-align: center; margin: 20px;">
+    <h1>Live Stream: {{ stream_id }}</h1>
+    <video id="video-stream" autoplay style="max-width: 90%; height: auto; border: 2px solid #000; border-radius: 8px; margin-top: 20px;"></video>
+    <br>
+    <a href="/" class="btn btn-primary mt-3" style="padding: 10px 20px; border-radius: 5px;">Back to Home</a>
+</div>
+
+<script>
+    // Get video element
+    const video = document.getElementById("video-stream");
+
+    // WebSocket URL for streaming video frames
+    const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const streamUrl = `${protocol}${window.location.host}/ws/live/{{ stream_id }}/`;
+ // Adjust URL to match your WebSocket server
+
+    // Initialize WebSocket connection
+    const socket = new WebSocket(streamUrl);
+
+    socket.onmessage = function(event) {
+    // Check if the server sends binary data or Base64-encoded frames
+    if (event.data instanceof Blob) {
+        const url = URL.createObjectURL(event.data);
+        video.src = url;
+        video.onload = () => URL.revokeObjectURL(url);
+    } else {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.frame) {
+                const byteCharacters = atob(data.frame);
+                const byteArrays = new Uint8Array(byteCharacters.length);
+
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteArrays[i] = byteCharacters.charCodeAt(i);
+                }
+
+                const blob = new Blob([byteArrays], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(blob);
+                video.src = url;
+                video.onload = () => URL.revokeObjectURL(url);
+            }
+        } catch (error) {
+            console.error("Error processing frame data:", error);
+        }
+    }
+};
+
+socket.onerror = function(error) {
+    console.error("WebSocket error:", error);
+    alert("An error occurred while connecting to the stream. Please try again later.");
+};
+
+socket.onclose = function(event) {
+    console.log("Stream connection closed");
+    alert("The stream has ended or the connection was lost.");
+    video.src = "";  // Clear video source if WebSocket closes
+};
+
+
+</script>
+{% endblock %}

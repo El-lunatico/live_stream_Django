@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Start Broadcast{% endblock %}
+{% block content %}
+<div class="text-center">
+    <h1 class="mb-4">Start Your Live Broadcast</h1>
+    <!-- Button to toggle live broadcast -->
+    <button id="broadcastButton" class="btn btn-primary btn-lg">Go Live</button>
+    <!-- Video preview element -->
+    <video id="preview" class="mt-4 border" autoplay muted style="display: none;"></video>
+</div>
+{% endblock %}
