@@ -1,109 +1,103 @@
-import cv2
-import json
-from channels.generic.websocket import AsyncWebsocketConsumer
 import logging
 import sqlite3
 import asyncio
+import cv2
+import base64
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
 
 class LiveStreamConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.stream_id = self.scope['url_route']['kwargs']['stream_id']
-        logger.info(f"Attempting WebSocket connection for stream ID: {self.stream_id}")
-        
-        # Validate stream ID in SQLite database
-        conn = sqlite3.connect('streams.db')
-        cursor = conn.cursor()
-        cursor.execute('SELECT * FROM active_streams WHERE stream_id = ? AND status = "active"', (self.stream_id,))
-        stream = cursor.fetchone()
-        conn.close()
-        
-        if not stream:
-            logger.warning(f"Stream ID {self.stream_id} not found in active_streams.")
+        logger.info(f"WebSocket connection attempt for stream ID: {self.stream_id}")
+
+        # Validate stream ID
+        if not self.validate_stream(self.stream_id):
+            logger.warning(f"Invalid or inactive stream ID: {self.stream_id}")
             await self.close()
             return
-        
+
         self.room_group_name = f"live_stream_{self.stream_id}"
-        
+
         try:
             await self.channel_layer.group_add(
                 self.room_group_name,
                 self.channel_name
             )
-            logger.info(f"WebSocket connected to room: {self.room_group_name}")
-        except Exception as e:
-            logger.error(f"Error adding WebSocket to group: {e}")
-            await self.close()
-            return
-        
-        await self.accept()
+            await self.accept()
+            logger.info(f"WebSocket connected to {self.room_group_name}")
 
-        # Start sending video frames after connection is established
-        asyncio.ensure_future(self.send_video_stream())
+        except Exception as e:
+            logger.error(f"Error during WebSocket connection: {e}")
+            await self.close()
 
     async def disconnect(self, close_code):
-        if hasattr(self, 'room_group_name'):
-            try:
-                await self.channel_layer.group_discard(
-                    self.room_group_name,
-                    self.channel_name
-                )
-                logger.info(f"WebSocket disconnected from room: {self.room_group_name}")
-            except Exception as e:
-                logger.error(f"Error discarding WebSocket from group: {e}")
+        try:
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
+            logger.info(f"WebSocket disconnected from {self.room_group_name}")
+        except Exception as e:
+            logger.error(f"Error during WebSocket disconnection: {e}")
 
     async def receive(self, text_data=None, bytes_data=None):
-        if text_data is not None:
-            logger.info(f"Text message received on WebSocket: {text_data}")
-            # Handle text messages here
-        elif bytes_data is not None:
-            logger.info(f"Binary data received on WebSocket: {len(bytes_data)} bytes")
-            # Handle binary data here (if needed)
-        else:
-            logger.warning("Received a message with no text_data or bytes_data")
-
-    async def send_frame(self, frame_data):
-        """
-        Sends a single video frame to the WebSocket.
-        """
+        logger.info(f"Received message: {text_data if text_data else '[binary data]'}")
         try:
-            await self.send(bytes_data=frame_data)  # Send binary data
-        except Exception as e:
-            logger.error(f"Error sending frame: {e}")
+            if text_data:
+                data = json.loads(text_data)
+                frame_data = data.get('frame')  # Assuming frame is sent as base64
 
-    async def send_video_stream(self):
-        """
-        Captures video frames and sends them over WebSocket.
-        """
-        video_capture = cv2.VideoCapture(0)  # Open the default camera
-        if not video_capture.isOpened():
-            logger.error("Unable to access the camera.")
-            await self.close()
-            return
-        
-        logger.info("Camera opened successfully. Starting video stream.")
-        
+                if frame_data:
+                    # Log frame metadata
+                    logger.debug(f"Frame data length: {len(frame_data)}")
+                    frame_bytes = base64.b64decode(frame_data.split(',')[1])
+                    np_array = np.frombuffer(frame_bytes, dtype=np.uint8)
+                    frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+
+                    if frame is not None:
+                        logger.debug(f"Frame received with shape: {frame.shape}")
+                    else:
+                        logger.warning("Received frame is None or failed to decode.")
+
+                    # Optional: Show frame locally for debugging
+                    cv2.imshow('Received Frame', frame)
+                    cv2.waitKey(1)
+
+                    # Send the frame to other clients in the same stream group
+                    await self.channel_layer.group_send(
+                        self.room_group_name,
+                        {
+                            'type': 'send_frame',
+                            'frame': frame_data,  # Send the frame data back as base64
+                        }
+                    )
+            else:
+                logger.warning("No text data received.")
+        except Exception as e:
+            logger.error(f"Error processing frame: {e}")
+
+    async def send_frame(self, event):
+        frame_data = event['frame']
+        logger.debug(f"Sending frame to WebSocket: {len(frame_data)} bytes")
+        await self.send(text_data=json.dumps({
+            'frame': frame_data  # Send the base64 encoded frame
+        }))
+
+    def validate_stream(self, stream_id):
+        """Check if the stream ID exists and is active in the database."""
         try:
-            while True:
-                success, frame = video_capture.read()
-                if not success:
-                    logger.error("Failed to capture frame from camera.")
-                    break
-
-                # Encode the frame as JPEG
-                _, buffer = cv2.imencode('.jpg', frame)
-                frame_data = buffer.tobytes()
-                logger.info(f"Captured and sending frame of size: {len(frame_data)} bytes")
-                
-                # Send the frame
-                await self.send_frame(frame_data)
-                
-                # Limit the frame rate (30 FPS)
-                await asyncio.sleep(1 / 30)
-        except Exception as e:
-            logger.error(f"Error during video stream: {e}")
-        finally:
-            video_capture.release()  # Release the camera resource
-            logger.info("Camera released and video stream ended.")
-            await self.close()
+            conn = sqlite3.connect('streams.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM active_streams WHERE stream_id = ? AND status = "active"', (stream_id,))
+            stream = cursor.fetchone()
+            conn.close()
+            logger.debug(f"Validation result for stream_id {stream_id}: {'Exists' if stream else 'Does not exist'}")
+            return bool(stream)
+        except sqlite3.Error as e:
+            logger.error(f"Database error during validation: {e}")
+            return False

@@ -6,7 +6,7 @@
     <div id="streams" class="d-flex flex-wrap justify-content-center gap-3">
         {% if streams %}
             {% for stream_id in streams %}
-                <a href="/watch_stream/{{ stream_id }}/" class="btn btn-primary">
+                <a href="/watch_stream/{{ stream_id }}/" class="btn btn-primary stream-link" data-stream-id="{{ stream_id }}">
                     Watch Stream: {{ stream_id }}
                 </a>
             {% endfor %}

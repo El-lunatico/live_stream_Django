@@ -53,11 +53,8 @@ def start_broadcast(request):
             if existing_stream:
                 return JsonResponse({"message": "Stream ID already exists."}, status=400)
 
-            # Initialize VideoCapture for the new stream
-            video_capture = cv2.VideoCapture(0)  # Use the default camera
-            if not video_capture.isOpened():
-                return JsonResponse({"message": "Failed to access webcam."}, status=500)
-            
+            stream_url = f"ws://{request.get_host()}/ws/live/{stream_id}/"  # Correct WebSocket URL
+
             # Insert the stream into the database
             conn = sqlite3.connect('streams.db')
             cursor = conn.cursor()
@@ -111,49 +108,87 @@ def stop_broadcast(request):
             cursor.execute('UPDATE active_streams SET status = ? WHERE stream_id = ?', ('inactive', stream_id))
             conn.commit()
             conn.close()
-
-            # Release the VideoCapture object (if needed)
-            # video_capture = active_streams.pop(stream_id)
-            # video_capture.release()
+            clean_inactive_streams()
             
             return JsonResponse({"message": f"Broadcast '{stream_id}' stopped successfully."})
-        
+      
         except json.JSONDecodeError:
             return JsonResponse({"message": "Invalid JSON data."}, status=400)
     return JsonResponse({"message": "Invalid request method."}, status=405)
 
 def watch_stream(request, stream_id):
-    """Render video player or stream video frames."""
-    # Check if the stream exists in SQLite
+    """
+    Render video player or stream video frames.
+    Validates if the stream exists and serves the HTML page for the given stream_id.
+    """
+    # Check if the stream exists and is active in SQLite
     conn = sqlite3.connect('streams.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM active_streams WHERE stream_id = ? AND status = "active"', (stream_id,))
+    cursor.execute(
+        'SELECT * FROM active_streams WHERE stream_id = ? AND status = "active"',
+        (stream_id,)
+    )
     stream = cursor.fetchone()
     conn.close()
 
     if not stream:
-        return JsonResponse({"message": "Stream not found."}, status=404)
+        return JsonResponse({"message": "Stream not found or inactive."}, status=404)
 
     if request.method == 'GET':
         # Render the HTML page for watching the stream
-        stream_url = f"ws://localhost:8000/ws/live/{stream_id}/"  # WebSocket URL
-        return render(request, 'watch_stream.html', {"stream_id": stream_id, "stream_url": stream_url})
+        stream_url = f"wss://{request.get_host()}/ws/live/{stream_id}/"    # WebSocket URL
+        return render(
+            request,
+            'watch_stream.html',
+            {"stream_id": stream_id, "stream_url": stream_url}
+        )
+
+    # Clean up inactive streams if any
+    clean_inactive_streams()
+    return JsonResponse({"message": "Stream cleanup completed."})
 
 
-def gen_frames(video_capture):
-    """Generate video frames for streaming."""
-    while True:
-        success, frame = video_capture.read()
-        if not success:
-            break
-        try:
-            _, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        except Exception as e:
-            print(f"Error generating frames: {e}")
-            break
+# def gen_frames(video_capture, stream_id):
+#     try:
+#         while True:
+#             success, frame = video_capture.read()
+#             if not success or frame is None:
+#                 print(f"Failed to capture frame for stream ID: {stream_id}")
+#                 break
+
+#             print(f"Frame shape: {frame.shape}")
+#             # Display the frame for debugging
+#             cv2.imshow(f"Stream ID: {stream_id}", frame)
+
+#             # Close the imshow window gracefully
+#             if cv2.waitKey(1) & 0xFF == ord('q'):
+#                 print(f"Closing stream preview for Stream ID: {stream_id}")
+#                 break
+
+#             # Encode and yield the frame for streaming
+#             ret, buffer = cv2.imencode('.jpg', frame)
+#             if not ret:
+#                 print("Error: Frame encoding failed!")
+#                 continue
+
+#             frame = buffer.tobytes()
+#             yield (b'--frame\r\n'
+#                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+#     finally:
+#         video_capture.release()
+#         cv2.destroyAllWindows()
+
+
+
+def clean_inactive_streams():
+    """Remove inactive streams from the database."""
+    conn = sqlite3.connect('streams.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM active_streams WHERE status = "inactive"')
+    conn.commit()
+    conn.close()
+    
+
 
 import logging
 logger = logging.getLogger(__name__)
